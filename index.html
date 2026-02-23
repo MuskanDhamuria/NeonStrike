@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Neon Strike</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #0a0a0a;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            touch-action: none;
+        }
+        #gameCanvas {
+            display: block;
+            image-rendering: pixelated;
+        }
+        .ui-overlay {
+            pointer-events: none;
+            user-select: none;
+        }
+        .interactive {
+            pointer-events: auto;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.05); opacity: 0.8; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .pulse-text {
+            animation: pulse 2s infinite;
+        }
+    </style>
+</head>
+<body class="flex items-center justify-center h-screen">
+
+    <!-- Game UI -->
+    <div id="ui-container" class="absolute inset-0 ui-overlay flex flex-col items-center justify-between p-6">
+        <!-- Top Bar -->
+        <div class="w-full flex justify-between items-start">
+            <div class="bg-black/50 backdrop-blur-md p-4 rounded-xl border border-cyan-500/30">
+                <div class="text-cyan-400 text-xs uppercase tracking-widest font-bold">Score</div>
+                <div id="score-display" class="text-white text-3xl font-black">0</div>
+            </div>
+            <div class="bg-black/50 backdrop-blur-md p-4 rounded-xl border border-red-500/30">
+                <div class="text-red-400 text-xs uppercase tracking-widest font-bold">Health</div>
+                <div class="w-32 h-3 bg-gray-800 rounded-full mt-2 overflow-hidden">
+                    <div id="health-bar" class="h-full bg-gradient-to-r from-red-600 to-orange-400 transition-all duration-300" style="width: 100%"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Start/GameOver Screen -->
+        <div id="menu-screen" class="interactive bg-black/80 backdrop-blur-xl p-10 rounded-3xl border-2 border-cyan-500 shadow-[0_0_50px_rgba(6,182,212,0.3)] text-center flex flex-col items-center gap-6">
+            <h1 class="text-6xl font-black text-transparent bg-clip-text bg-gradient-to-br from-cyan-400 to-blue-600 tracking-tighter">NEON STRIKE</h1>
+            <p class="text-gray-400 max-w-xs">WASD to Move. Mouse to Aim & Shoot. Survive the neon swarm.</p>
+            <button id="start-btn" class="px-10 py-4 bg-cyan-500 hover:bg-cyan-400 text-black font-black rounded-full transition-transform active:scale-95 text-xl tracking-widest">START MISSION</button>
+        </div>
+
+        <!-- Mobile Controls (Visible on touch devices) -->
+        <div id="mobile-controls" class="w-full flex justify-between items-end pb-8 interactive hidden">
+            <div id="joystick-base" class="w-32 h-32 bg-white/10 rounded-full border-2 border-white/20 relative flex items-center justify-center">
+                <div id="joystick-knob" class="w-12 h-12 bg-cyan-500 rounded-full shadow-lg shadow-cyan-500/50"></div>
+            </div>
+            <button id="fire-btn" class="w-24 h-24 bg-red-500/50 border-4 border-red-500 rounded-full flex items-center justify-center active:scale-90 transition-transform">
+                <span class="text-white font-bold">FIRE</span>
+            </button>
+        </div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreDisplay = document.getElementById('score-display');
+        const healthBar = document.getElementById('health-bar');
+        const menuScreen = document.getElementById('menu-screen');
+        const startBtn = document.getElementById('start-btn');
+        const mobileControls = document.getElementById('mobile-controls');
+
+        // Game State
+        let gameState = 'MENU'; // MENU, PLAYING, GAMEOVER
+        let score = 0;
+        let animationId;
+        const keys = {};
+        const mouse = { x: 0, y: 0, down: false };
+
+        // Mobile Joystick State
+        let joystickActive = false;
+        let joystickStart = { x: 0, y: 0 };
+        let joystickMove = { x: 0, y: 0 };
+        let moveVector = { x: 0, y: 0 };
+
+        // Config
+        const PLAYER_SPEED = 5;
+        const BULLET_SPEED = 10;
+        const ENEMY_BASE_SPEED = 2;
+        const SPAWN_RATE = 1000; // ms
+
+        class Entity {
+            constructor(x, y, radius, color) {
+                this.x = x;
+                this.y = y;
+                this.radius = radius;
+                this.color = color;
+                this.velocity = { x: 0, y: 0 };
+            }
+            draw() {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = this.color;
+                ctx.fill();
+                ctx.closePath();
+                ctx.shadowBlur = 0;
+            }
+            update() {
+                this.x += this.velocity.x;
+                this.y += this.velocity.y;
+            }
+        }
+
+        class Player extends Entity {
+            constructor() {
+                super(canvas.width / 2, canvas.height / 2, 15, '#22d3ee');
+                this.health = 100;
+                this.angle = 0;
+            }
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.angle);
+                
+                // Draw Triangle Ship
+                ctx.beginPath();
+                ctx.moveTo(20, 0);
+                ctx.lineTo(-10, -12);
+                ctx.lineTo(-10, 12);
+                ctx.closePath();
+                ctx.fillStyle = this.color;
+                ctx.shadowBlur = 20;
+                ctx.shadowColor = this.color;
+                ctx.fill();
+                
+                // Engine Glow
+                if (keys['w'] || keys['a'] || keys['s'] || keys['d'] || joystickActive) {
+                    ctx.beginPath();
+                    ctx.moveTo(-10, -5);
+                    ctx.lineTo(-20, 0);
+                    ctx.lineTo(-10, 5);
+                    ctx.fillStyle = '#f87171';
+                    ctx.fill();
+                }
+
+                ctx.restore();
+                ctx.shadowBlur = 0;
+            }
+            update() {
+                // Movement
+                let vx = 0;
+                let vy = 0;
+
+                if (keys['w']) vy -= PLAYER_SPEED;
+                if (keys['s']) vy += PLAYER_SPEED;
+                if (keys['a']) vx -= PLAYER_SPEED;
+                if (keys['d']) vx += PLAYER_SPEED;
+
+                // Mobile movement
+                if (joystickActive) {
+                    vx = moveVector.x * PLAYER_SPEED;
+                    vy = moveVector.y * PLAYER_SPEED;
+                }
+
+                this.velocity.x = vx;
+                this.velocity.y = vy;
+
+                super.update();
+
+                // Boundaries
+                this.x = Math.max(this.radius, Math.min(canvas.width - this.radius, this.x));
+                this.y = Math.max(this.radius, Math.min(canvas.height - this.radius, this.y));
+
+                // Rotation to mouse
+                if (!isTouchDevice()) {
+                    this.angle = Math.atan2(mouse.y - this.y, mouse.x - this.x);
+                } else if (joystickActive) {
+                    this.angle = Math.atan2(moveVector.y, moveVector.x);
+                }
+            }
+        }
+
+        class Bullet extends Entity {
+            constructor(x, y, angle, color = '#fef08a') {
+                super(x, y, 4, color);
+                this.velocity = {
+                    x: Math.cos(angle) * BULLET_SPEED,
+                    y: Math.sin(angle) * BULLET_SPEED
+                };
+            }
+        }
+
+        class Enemy extends Entity {
+            constructor() {
+                const radius = Math.random() * (20 - 10) + 10;
+                let x, y;
+                // Spawn off-screen
+                if (Math.random() < 0.5) {
+                    x = Math.random() < 0.5 ? -radius : canvas.width + radius;
+                    y = Math.random() * canvas.height;
+                } else {
+                    x = Math.random() * canvas.width;
+                    y = Math.random() < 0.5 ? -radius : canvas.height + radius;
+                }
+                super(x, y, radius, '#f43f5e');
+                this.speed = ENEMY_BASE_SPEED + (score / 1000);
+            }
+            update(player) {
+                const angle = Math.atan2(player.y - this.y, player.x - this.x);
+                this.velocity.x = Math.cos(angle) * this.speed;
+                this.velocity.y = Math.sin(angle) * this.speed;
+                super.update();
+            }
+        }
+
+        class Particle extends Entity {
+            constructor(x, y, color) {
+                super(x, y, Math.random() * 3, color);
+                this.velocity = {
+                    x: (Math.random() - 0.5) * 8,
+                    y: (Math.random() - 0.5) * 8
+                };
+                this.alpha = 1;
+            }
+            draw() {
+                ctx.save();
+                ctx.globalAlpha = this.alpha;
+                super.draw();
+                ctx.restore();
+            }
+            update() {
+                super.update();
+                this.alpha -= 0.02;
+            }
+        }
+
+        let player;
+        let bullets = [];
+        let enemies = [];
+        let particles = [];
+        let lastSpawn = 0;
+        let lastShot = 0;
+        const fireRate = 150;
+
+        function init() {
+            resize();
+            player = new Player();
+            bullets = [];
+            enemies = [];
+            particles = [];
+            score = 0;
+            scoreDisplay.innerText = score;
+            healthBar.style.width = '100%';
+            
+            if (isTouchDevice()) {
+                mobileControls.classList.remove('hidden');
+            }
+        }
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            if (player) {
+                player.x = canvas.width / 2;
+                player.y = canvas.height / 2;
+            }
+        }
+
+        function spawnExplosion(x, y, color) {
+            for (let i = 0; i < 10; i++) {
+                particles.push(new Particle(x, y, color));
+            }
+        }
+
+        function gameLoop(timestamp) {
+            if (gameState !== 'PLAYING') return;
+
+            ctx.fillStyle = 'rgba(10, 10, 10, 0.2)'; // Motion blur effect
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Draw Background Grid (Subtle)
+            ctx.strokeStyle = '#1e1e1e';
+            ctx.lineWidth = 1;
+            const gridSize = 50;
+            for(let x=0; x<canvas.width; x+=gridSize) {
+                ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,canvas.height); ctx.stroke();
+            }
+            for(let y=0; y<canvas.height; y+=gridSize) {
+                ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(canvas.width,y); ctx.stroke();
+            }
+
+            player.update();
+            player.draw();
+
+            // Handle Firing
+            if (mouse.down && timestamp - lastShot > fireRate) {
+                bullets.push(new Bullet(player.x, player.y, player.angle));
+                lastShot = timestamp;
+            }
+
+            // Update Bullets
+            bullets.forEach((bullet, bIndex) => {
+                bullet.update();
+                bullet.draw();
+                // Remove if off-screen
+                if (bullet.x < 0 || bullet.x > canvas.width || bullet.y < 0 || bullet.y > canvas.height) {
+                    bullets.splice(bIndex, 1);
+                }
+            });
+
+            // Update Enemies
+            if (timestamp - lastSpawn > Math.max(300, SPAWN_RATE - (score/10))) {
+                enemies.push(new Enemy());
+                lastSpawn = timestamp;
+            }
+
+            enemies.forEach((enemy, eIndex) => {
+                enemy.update(player);
+                enemy.draw();
+
+                // Collision with player
+                const distPlayer = Math.hypot(player.x - enemy.x, player.y - enemy.y);
+                if (distPlayer < player.radius + enemy.radius) {
+                    player.health -= 0.5;
+                    healthBar.style.width = `${player.health}%`;
+                    spawnExplosion(player.x, player.y, '#f43f5e');
+                    
+                    if (player.health <= 0) {
+                        gameOver();
+                    }
+                }
+
+                // Collision with bullets
+                bullets.forEach((bullet, bIndex) => {
+                    const distBullet = Math.hypot(bullet.x - enemy.x, bullet.y - enemy.y);
+                    if (distBullet < bullet.radius + enemy.radius) {
+                        spawnExplosion(enemy.x, enemy.y, enemy.color);
+                        enemies.splice(eIndex, 1);
+                        bullets.splice(bIndex, 1);
+                        score += 10;
+                        scoreDisplay.innerText = score;
+                    }
+                });
+            });
+
+            // Update Particles
+            particles.forEach((p, i) => {
+                p.update();
+                p.draw();
+                if (p.alpha <= 0) particles.splice(i, 1);
+            });
+
+            animationId = requestAnimationFrame(gameLoop);
+        }
+
+        function gameOver() {
+            gameState = 'GAMEOVER';
+            cancelAnimationFrame(animationId);
+            menuScreen.classList.remove('hidden');
+            menuScreen.querySelector('h1').innerText = 'WASTED';
+            menuScreen.querySelector('h1').classList.add('text-red-500');
+            menuScreen.querySelector('p').innerText = `Your score: ${score}`;
+            startBtn.innerText = 'RETRY';
+        }
+
+        function isTouchDevice() {
+            return ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+        }
+
+        // Event Listeners
+        window.addEventListener('keydown', (e) => keys[e.key.toLowerCase()] = true);
+        window.addEventListener('keyup', (e) => keys[e.key.toLowerCase()] = false);
+        window.addEventListener('mousemove', (e) => {
+            mouse.x = e.clientX;
+            mouse.y = e.clientY;
+        });
+        window.addEventListener('mousedown', () => mouse.down = true);
+        window.addEventListener('mouseup', () => mouse.down = false);
+        window.addEventListener('resize', resize);
+
+        // Mobile Joystick Logic
+        const joystickBase = document.getElementById('joystick-base');
+        const joystickKnob = document.getElementById('joystick-knob');
+        const fireBtn = document.getElementById('fire-btn');
+
+        joystickBase.addEventListener('touchstart', (e) => {
+            joystickActive = true;
+            const touch = e.touches[0];
+            const rect = joystickBase.getBoundingClientRect();
+            joystickStart = {
+                x: rect.left + rect.width / 2,
+                y: rect.top + rect.height / 2
+            };
+        });
+
+        window.addEventListener('touchmove', (e) => {
+            if (!joystickActive) return;
+            const touch = e.touches[0];
+            const dx = touch.clientX - joystickStart.x;
+            const dy = touch.clientY - joystickStart.y;
+            const distance = Math.min(60, Math.hypot(dx, dy));
+            const angle = Math.atan2(dy, dx);
+
+            moveVector.x = (Math.cos(angle) * distance) / 60;
+            moveVector.y = (Math.sin(angle) * distance) / 60;
+
+            joystickKnob.style.transform = `translate(${Math.cos(angle) * distance}px, ${Math.sin(angle) * distance}px)`;
+        });
+
+        window.addEventListener('touchend', () => {
+            joystickActive = false;
+            moveVector = { x: 0, y: 0 };
+            joystickKnob.style.transform = `translate(0px, 0px)`;
+        });
+
+        fireBtn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            mouse.down = true;
+        });
+        fireBtn.addEventListener('touchend', () => mouse.down = false);
+
+        startBtn.addEventListener('click', () => {
+            menuScreen.classList.add('hidden');
+            gameState = 'PLAYING';
+            init();
+            requestAnimationFrame(gameLoop);
+        });
+
+        // Initialize display
+        init();
+        // Initial Draw
+        ctx.fillStyle = '#0a0a0a';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    </script>
+</body>
+</html>
