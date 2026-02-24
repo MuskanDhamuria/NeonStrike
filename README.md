@@ -1,7 +1,8 @@
 # 🎮 NEON STRIKE
 
-**Neon Strike** is a fast-paced neon arcade survival shooter built using **HTML5 Canvas**, **Vanilla JavaScript**, and **Tailwind CSS**.
+**Neon Strike** is a fast-paced neon arcade survival shooter.
 Dodge enemies, shoot strategically, and survive as long as possible against an increasingly aggressive neon swarm.
+Deployed application: https://muskandhamuria.github.io/NeonStrike/
 
 ---
 
